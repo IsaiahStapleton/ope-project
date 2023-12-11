@@ -1,8 +1,8 @@
-name: OPE Container Test
+name: Master OPE Container Test
 on:
   push:
     branches:
-      - 'main'
+      - 'container-base-ope'
 
 env:
     REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
@@ -10,9 +10,6 @@ env:
 jobs:
   Setup-and-Build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
       - name: Checkout Code #loads repo into action
         uses: actions/checkout@v3
@@ -20,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.9"
+          python-version: "3.9.16"
 
       - name: Install Dependencies
         run: |
@@ -38,31 +35,19 @@ jobs:
           sec_cut=${elapsed#*.} #get the decimal
           sec_round="${sec_cut:0:1}.${sec_cut:1}"
           sec=$(echo "$sec_round * 6" | bc -l) #calc secs
-          echo "${min}.m_${sec}.s" > time.txt #send to file for use in diff run
+          echo "${min}m${sec}s" > ./time.txt #send to file for use in diff run
           IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -n 1) #get built image
           echo "Image = $IMAGE"
-          echo $IMAGE > image.txt
-
-      - name: Upload Image
-        uses: actions/upload-artifact@v3
-        with:
-          name: image
-          path: |
-            ./containers/testing/image.txt
-
-      - name: Upload Time
-        uses: actions/upload-artifact@v3
-        with:
-          name: time
-          path: |
-            ./containers/testing/time.txt
+          echo $IMAGE > ./image.txt
 
       - name: Push Beta Version
         run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
           IMAGE=$(docker images --format "{{.Repository}}:{{.Tag}}" | head -n 1)
           docker run  -d --name stable $IMAGE
-          REGISTRY=$(cat base/ope_book_registry)
-          REGISTRY_USER=$(cat base/ope_registry_user)
+          REGISTRY=$(yq eval ".ope.book_registry" base/config.yml)
+          REGISTRY_USER=$(yq eval ".ope.registry_user" base/config.yml)
           echo $REGISTRY $REGISTRY_USER
           docker login $REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASSWORD
           TIME=$(cat time.txt)
@@ -70,14 +55,26 @@ jobs:
           make push TIME="$TIME" SIZE="$SIZE"
           docker stop stable
 
+      - name: Upload Image
+        uses: actions/upload-artifact@v3
+        with:
+          name: image
+          path: |
+            image.txt
+
+      - name: Upload Time
+        uses: actions/upload-artifact@v3
+        with:
+          name: time
+          path: |
+            time.txt
+
 
   Health-Check:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
+
       - name: Checkout Code
         uses: actions/checkout@v3
 
@@ -93,6 +90,7 @@ jobs:
           CONTAINER_NAME="stable"
           HEALTH=$(docker ps --format "{{.Names}}: {{.Status}}" | grep "$CONTAINER_NAME" | awk '{print $2}') #extract health status
           echo ""
+          echo "the value of HEALTH is: $HEALTH\n"
           if [[ "$HEALTH" == "Up" ]]; then
           echo "******Pass: container is up and running*******"
           else
@@ -106,9 +104,6 @@ jobs:
   Image-Version-Check:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout Code
@@ -126,6 +121,9 @@ jobs:
           ID=$( docker ps -aqf "name=stable" ) #get id of image
           docker inspect $IMAGE > image.json #write inspect info to json for parsing
           REPO_TAG=$(jq -r '.[0].RepoTags[0]' image.json) #acquire tag
+          echo "the value of REPO_TAG is: $REPO_TAG\n"
+          echo "the value of IMAGE is: $IMAGE\n"
+          echo "testing if REPO_TAG == IMAGE\n"
           if [[ "$REPO_TAG" == "$IMAGE" ]]; then
           echo "*********CORRECT IMAGE AND VERSION: $IMAGE*********"
           else
@@ -138,9 +136,6 @@ jobs:
   JupyterNB-Test:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout Code
@@ -178,9 +173,6 @@ jobs:
   Package-Version-Test:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout code
@@ -199,19 +191,24 @@ jobs:
           docker run -d --name stable $IMAGE
           sleep 7 # let properly start
           ID=$( docker ps -aqf "name=stable" )
-          docker exec stable pip list >> ./list.txt #get rid of header for python comparison test
-          tail -n +3 ./list.txt > temp.txt
+          docker exec stable mamba list >> ./list.txt #get rid of header for python comparison test
+          tail -n +4 ./list.txt > temp.txt
           mv ./temp.txt ./list.txt #rewrite truncated list to file
-          python3 version_check.py ./list.txt versions.txt #send to python for checking
+          PASS=$(python3 version_check.py ./list.txt versions.txt) #send to python for checking
+          if [[ "${PASS%% *}" == "PASS" ]]; then
+          echo "*********PACKAGE VERSIONS MATCH*********"
+          echo $PASS
+          else
+          echo "***********INCORRECT PACKAGE VERSIONS:**********"
+          echo $PASS
+          exit -1
+          fi
           docker stop stable
 
 
   Checksum:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout code
@@ -225,9 +222,6 @@ jobs:
   Size-and-Time-Display:
     needs: Setup-and-Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout Code
@@ -237,8 +231,6 @@ jobs:
         uses: actions/download-artifact@v3
         with:
           name: time
-          path: |
-            ./containers/testing/
 
       - name: Pull Image
         run: |
@@ -265,15 +257,12 @@ jobs:
         with:
           name: size
           path: |
-            ./containers/testing/size.txt
+            size.txt
 
 
   UI-Test:
     runs-on: ubuntu-latest
     needs: Setup-and-Build
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout Code
@@ -321,9 +310,6 @@ jobs:
   gdb-Test:
     runs-on: ubuntu-latest
     needs: Setup-and-Build
-    defaults:
-      run:
-        working-directory: ./containers/testing
     steps:
 
       - name: Checkout Code
@@ -344,8 +330,10 @@ jobs:
          docker exec stable bash -c 'for ((i=0;i<100; i++)); do gdb -ex starti -ex quit -q --batch /usr/bin/date 2>/dev/null | grep ld; done' | tee out | uniq #run jonatahns gdb test
          expected_lines=100
          actual_lines=$(wc -l < out)
+         echo "got $actual_lines of output and expected $expected_lines of output\n"
          if [ "$actual_lines" -lt "$expected_lines" ]; then
          echo "******************Test failed****************" #if the output file contians no iterations through the test file, gdb has failed
+         exit -1
          else
          echo "******************Test passed***************"
          fi
@@ -379,9 +367,6 @@ jobs:
   Publish:
      runs-on: ubuntu-latest #use the latest ubuntu container image
      needs: Approval
-     defaults:
-       run:
-         working-directory: ./containers/testing
      steps:
        - name: Checkout Code
          uses: actions/checkout@v3
@@ -390,20 +375,18 @@ jobs:
          uses: actions/download-artifact@v3
          with:
           name: time
-          path: |
-            ./containers/testing/
 
        - name: Download Size
          uses: actions/download-artifact@v3
          with:
           name: size
-          path: |
-            ./containers/testing/
 
        - name: Push to Public Version
          run: |
-           REGISTRY=$(cat base/ope_book_registry)
-           REGISTRY_USER=$(cat base/ope_registry_user)
+           sudo wget https://github.com/mikefarah/yq/releases/download/v4.2.0/yq_linux_amd64 -O /usr/bin/yq
+           sudo chmod +x /usr/bin/yq
+           REGISTRY=$(yq eval ".ope.book_registry" base/config.yml)
+           REGISTRY_USER=$(yq eval ".ope.registry_user" base/config.yml)
            TIME=$(cat time.txt)
            SIZE=$(cat size.txt)
            docker login $REGISTRY -u $REGISTRY_USER -p $REGISTRY_PASSWORD
