@@ -1,0 +1,13 @@
+#!/bin/bash
+if [[ ! -a ~/Work && -a /opt/app-root/src ]]; then
+  echo "linking: ln -s /opt/app-root/src ~/Work"
+  ln -s /opt/app-root/src ~/Work
+fi
+
+. sshagent.sh
+
+#watchmem
+
+echo "do this"
+echo ". $ENVFILE"
+

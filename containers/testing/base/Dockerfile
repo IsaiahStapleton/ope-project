@@ -108,6 +108,8 @@ RUN /usr/local/bin/start.sh true; \
 
 COPY start-notebook.d /usr/local/bin/start-notebook.d
 
+COPY juphub-utils /opt/app-root/src/juphub-utils
+
 ENV USER=$NB_USER
 
 # Change the ownership of the home directory to ope group so it starts up properly
